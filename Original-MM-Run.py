@@ -1,11 +1,4 @@
-from SPIKE_TEMPLATE import *
-# Import specific objects that may not be included in the * import
-import SPIKE_TEMPLATE
-from pybricks.hubs import PrimeHub
-from pybricks.pupdevices import Motor, ColorSensor
-from pybricks.parameters import Button, Port, Direction
-from pybricks.robotics import DriveBase
-from pybricks.tools import wait, StopWatch, run_task
+from SPIKE_TEMPLATE import*
 import umath
 
 # =================================================================
