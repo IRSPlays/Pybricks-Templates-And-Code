@@ -309,6 +309,34 @@ def mapAccelAdaptive(target_speed, distance=1000, surface_type='normal'):
     
     return final_accel, final_decel
 
+def mapAccelSmoothed(target_speed, distance=1000, smoothness_factor=1.5):
+    """
+    Enhanced acceleration mapping with extra smoothness for sensitive movements.
+    
+    Args:
+        target_speed: Target speed in user units (-100 to 100)
+        distance: Distance for the movement in mm
+        smoothness_factor: Smoothness multiplier (1.0 = normal, >1.0 = smoother)
+    
+    Returns:
+        (acceleration, deceleration) tuple optimized for ultra-smooth motion
+    """
+    # Start with feedforward base
+    accel_base, decel_base = mapAccelFF(target_speed, distance)
+    
+    # Apply smoothness factor - reduces acceleration for gentler motion
+    smooth_accel = accel_base / smoothness_factor
+    smooth_decel = decel_base / smoothness_factor
+    
+    # Ensure minimums for reliable motion
+    min_accel = 150  # Lower minimum for extra smooth motion
+    max_accel = 800  # Lower maximum to prevent jerky motion
+    
+    final_accel = min(max_accel, max(min_accel, smooth_accel))
+    final_decel = min(max_accel, max(min_accel, smooth_decel))
+    
+    return final_accel, final_decel
+
 # Parameters for basic movements
 class MotionParameters:
     # Public member variables (accessible directly)
@@ -385,6 +413,13 @@ class MotionParameters:
                 'USE_SCURVE': True,
                 'SURFACE_TYPE': 'normal',
                 'MOTION_MODE': 'balanced'
+            },
+            'ultra_smooth': {
+                'USE_FEEDFORWARD': True,
+                'CONSERVATIVE_FF': True,
+                'USE_SCURVE': True,
+                'SURFACE_TYPE': 'precision',
+                'MOTION_MODE': 'ultra_smooth'
             }
         }
         
@@ -731,6 +766,74 @@ class robot:
         """Resets the robot's distance measurement."""
         drive_base.reset()
 
+    # ===== Movement Validation and Enhancement ====
+    def validateMovement(expected_distance=None, expected_angle=None, tolerance_mm=3, tolerance_deg=2):
+        """
+        Validates if the last movement was completed successfully.
+        
+        Args:
+            expected_distance: Expected distance in mm (None to skip distance check)
+            expected_angle: Expected angle change in degrees (None to skip angle check)
+            tolerance_mm: Distance tolerance in mm
+            tolerance_deg: Angle tolerance in degrees
+            
+        Returns:
+            (success, distance_error, angle_error) tuple
+        """
+        success = True
+        distance_error = 0
+        angle_error = 0
+        
+        if expected_distance is not None:
+            actual_distance = abs(drive_base.distance())
+            distance_error = abs(expected_distance) - actual_distance
+            if abs(distance_error) > tolerance_mm:
+                success = False
+                print(f"Distance validation failed: expected {expected_distance}mm, got {actual_distance:.1f}mm (error: {distance_error:.1f}mm)")
+        
+        if expected_angle is not None:
+            actual_angle = hub.imu.heading()
+            # Simple angle error calculation (could be enhanced for wraparound)
+            angle_error = expected_angle - actual_angle
+            if abs(angle_error) > tolerance_deg:
+                success = False
+                print(f"Angle validation failed: expected {expected_angle}°, got {actual_angle:.1f}° (error: {angle_error:.1f}°)")
+        
+        if success:
+            print("Movement validation: SUCCESS")
+        
+        return success, distance_error, angle_error
+
+    async def recoverMovement(distance_error, angle_error, max_speed=20):
+        """
+        Attempts to recover from a failed movement by making small corrections.
+        
+        Args:
+            distance_error: Distance error in mm (positive = need to go further)
+            angle_error: Angle error in degrees (positive = need to turn more)
+            max_speed: Maximum speed for recovery movements
+        """
+        print(f"Attempting movement recovery: distance_error={distance_error:.1f}mm, angle_error={angle_error:.1f}°")
+        
+        # Correct distance error first
+        if abs(distance_error) > 1:  # Only correct if error > 1mm
+            correction_distance = distance_error
+            recovery_speed = min(max_speed, max(10, abs(distance_error) * 2))  # Speed based on error magnitude
+            print(f"Distance correction: {correction_distance:.1f}mm at speed {recovery_speed}")
+            
+            drive_base.settings(mapSpeed(recovery_speed), (200, 300))  # Gentle acceleration for corrections
+            await drive_base.straight(correction_distance, Stop.BRAKE)
+            await wait(50)  # Small settle time
+        
+        # Correct angle error
+        if abs(angle_error) > 0.5:  # Only correct if error > 0.5°
+            recovery_turn_speed = min(max_speed, max(8, abs(angle_error) * 3))  # Speed based on error magnitude
+            print(f"Angle correction: {angle_error:.1f}° at speed {recovery_turn_speed}")
+            
+            drive_base.settings(None, None, mapSpeed(recovery_turn_speed), (200, 300))
+            await drive_base.turn(angle_error, Stop.BRAKE)
+            await wait(50)  # Small settle time
+
     # ===== Movements ====
     async def straight(SPEED, DISTANCE, STOP_DELAY = 0.2, BRAKE_TYPE = 1): 
         """
@@ -773,7 +876,10 @@ class robot:
             # Use feedforward control for enhanced acceleration/deceleration if enabled
             if mp.USE_FEEDFORWARD:
                 # Select acceleration mapping method based on settings
-                if mp.USE_SCURVE:
+                if mp.MOTION_MODE == 'ultra_smooth':
+                    accel_ff, decel_ff = mapAccelSmoothed(SPEED, abs(DISTANCE), 1.8)
+                    mode_text = "Ultra-Smooth"
+                elif mp.USE_SCURVE:
                     accel_ff, decel_ff = mapAccelSCurve(SPEED, abs(DISTANCE))
                     mode_text = "S-Curve"
                 elif mp.SURFACE_TYPE != 'normal' or mp.MOTION_MODE != 'balanced':
@@ -784,7 +890,7 @@ class robot:
                     mode_text = "Standard FF"
                 
                 # Apply conservative mode if enabled to prevent tilting
-                if mp.CONSERVATIVE_FF:
+                if mp.CONSERVATIVE_FF and mp.MOTION_MODE != 'ultra_smooth':  # ultra_smooth already conservative
                     accel_ff = min(accel_ff * 0.7, 800)  # Reduce by 30% and cap at 800
                     decel_ff = min(decel_ff * 0.8, 900)  # Reduce by 20% and cap at 900
                     print(f"Conservative {mode_text}: Speed={SPEED}, Distance={DISTANCE}mm, Accel={accel_ff:.1f}, Decel={decel_ff:.1f}")
@@ -1094,6 +1200,87 @@ class robot:
         if STOP_DELAY > 0:
             await robot.playTone(700, STOP_DELAY * 1000)
 
+    async def straightEnhanced(SPEED, DISTANCE, STOP_DELAY = 0.2, VALIDATE = True, RECOVER = True):
+        """
+        ENHANCED STRAIGHT MOVEMENT - Combines validation, recovery, and adaptive control.
+        
+        PARAMETERS:
+        -
+        **`SPEED`**: Target speed (-100 to 100)
+        **`DISTANCE`**: Distance to move in **millimeters**
+        **`STOP_DELAY`**: Delay after movement
+        **`VALIDATE`**: Enable movement validation
+        **`RECOVER`**: Enable automatic recovery from errors
+        
+        This is the most advanced straight movement function with built-in error checking.
+        """
+        print(f"ENHANCED_STRAIGHT: {DISTANCE}mm at speed {SPEED} (validate={VALIDATE}, recover={RECOVER})")
+        
+        drive_base.use_gyro(mp.GYRO_USAGE)
+        reset()
+        
+        SPEED = mp.SPEED * SPEED if abs(SPEED) == 1 else SPEED 
+        if DISTANCE == 0:
+            return
+            
+        original_distance = DISTANCE
+        DISTANCE = -DISTANCE if SPEED < 0 else DISTANCE 
+        target_distance = abs(DISTANCE)
+        
+        # Store initial state for validation
+        initial_heading = hub.imu.heading()
+        
+        # Use adaptive acceleration based on distance
+        if target_distance < 50:  # Short movements
+            accel_ff, decel_ff = mapAccelAdaptive(SPEED, target_distance, 'precision')
+            mode = "Precision"
+        elif mp.USE_SCURVE:  # S-curve for smooth motion
+            accel_ff, decel_ff = mapAccelSCurve(SPEED, target_distance)
+            mode = "S-Curve"
+        else:  # Standard feedforward
+            accel_ff, decel_ff = mapAccelFF(SPEED, target_distance)
+            mode = "Standard"
+        
+        print(f"{mode} control: Accel={accel_ff:.1f}, Decel={decel_ff:.1f}")
+        
+        drive_base.settings(mapSpeed(SPEED), (accel_ff, decel_ff))
+        await drive_base.straight(DISTANCE, Stop.BRAKE)
+        
+        # Movement validation and recovery
+        success = True
+        if VALIDATE:
+            success, distance_error, angle_error = robot.validateMovement(
+                expected_distance=target_distance, 
+                expected_angle=None,  # Don't validate angle for straight movement
+                tolerance_mm=3
+            )
+            
+            if not success and RECOVER:
+                print("Movement validation failed - attempting recovery")
+                await robot.recoverMovement(distance_error, 0, max_speed=20)
+                
+                # Re-validate after recovery
+                success, _, _ = robot.validateMovement(
+                    expected_distance=target_distance,
+                    tolerance_mm=5  # Slightly more lenient after recovery
+                )
+                if success:
+                    print("Recovery successful")
+                else:
+                    print("Recovery failed - movement may be inaccurate")
+        
+        # Adaptive settling time based on movement type
+        if mode == "S-Curve":
+            await wait(75)
+        elif mode == "Precision":
+            await wait(100)
+        else:
+            await wait(50)
+        
+        if STOP_DELAY > 0:
+            tone_frequency = 1000 if success else 500  # Different tone for failed movements
+            await robot.playTone(tone_frequency, STOP_DELAY * 1000)
+
     async def wallAlignment(SPEED, SECONDS, STOP_DELAY = 0.2):
         """
         PARAMETERS:
@@ -1337,6 +1524,105 @@ class robot:
             print("PRECISION_ACHIEVED: No correction needed")
         
         await robot.playTone(900, 200)
+
+    async def spotTurnEnhanced(SPEED, DEGREES, STOP_DELAY = 0.2, VALIDATE = True, RECOVER = True):
+        """
+        ENHANCED SPOT TURN - Advanced turning with validation and recovery.
+        
+        PARAMETERS:
+        -
+        **`SPEED`**: Target speed (-100 to 100)
+        **`DEGREES`**: Number of degrees to turn
+        **`STOP_DELAY`**: Delay after movement
+        **`VALIDATE`**: Enable turn validation
+        **`RECOVER`**: Enable automatic recovery from errors
+        
+        Uses gyro feedback for maximum accuracy and includes error recovery.
+        """
+        print(f"ENHANCED_SPOT_TURN: {DEGREES}° at speed {SPEED} (validate={VALIDATE}, recover={RECOVER})")
+        
+        # Store initial heading for validation
+        initial_heading = hub.imu.heading()
+        target_heading = (initial_heading + DEGREES) % 360
+        
+        drive_base.use_gyro(mp.GYRO_USAGE)
+        reset()
+        
+        SPEED = mp.SPEED * SPEED if abs(SPEED) == 1 else SPEED
+        DEGREES = -abs(DEGREES) if SPEED < 0 else DEGREES 
+        
+        # Adaptive acceleration based on turn size
+        if abs(DEGREES) < 30:  # Small turns - precision mode
+            accel_ff, decel_ff = mapAccelAdaptive(SPEED, abs(DEGREES) * 2.6, 'precision')  # Convert degrees to mm equivalent
+            mode = "Precision"
+        elif mp.USE_SCURVE:  # S-curve for smooth turns
+            turn_distance_mm = (abs(DEGREES) / 360.0) * 3.14159 * 95
+            accel_ff, decel_ff = mapAccelSCurve(SPEED, turn_distance_mm)
+            mode = "S-Curve"
+        else:  # Standard feedforward
+            turn_distance_mm = (abs(DEGREES) / 360.0) * 3.14159 * 95
+            accel_ff, decel_ff = mapAccelFF(SPEED, turn_distance_mm)
+            mode = "Standard"
+        
+        print(f"{mode} turn control: Accel={accel_ff:.1f}, Decel={decel_ff:.1f}")
+        
+        drive_base.settings(None, None, mapSpeed(SPEED), (accel_ff, decel_ff))
+        await drive_base.turn(DEGREES, Stop.BRAKE)
+        
+        # Turn validation and recovery
+        success = True
+        if VALIDATE:
+            final_heading = hub.imu.heading()
+            
+            # Calculate angle error with wraparound handling
+            angle_error = target_heading - final_heading
+            if angle_error > 180:
+                angle_error -= 360
+            elif angle_error < -180:
+                angle_error += 360
+            
+            tolerance = 2 if mode == "Precision" else 3  # Tighter tolerance for precision mode
+            
+            if abs(angle_error) > tolerance:
+                success = False
+                print(f"Turn validation failed: target {target_heading:.1f}°, actual {final_heading:.1f}°, error {angle_error:.1f}°")
+                
+                if RECOVER:
+                    print("Attempting turn recovery")
+                    # Make correction with slower speed
+                    correction_speed = max(8, abs(SPEED) // 4)
+                    correction_degrees = angle_error
+                    
+                    drive_base.settings(None, None, mapSpeed(correction_speed), (200, 300))
+                    await drive_base.turn(correction_degrees, Stop.BRAKE)
+                    
+                    # Re-validate
+                    corrected_heading = hub.imu.heading()
+                    corrected_error = target_heading - corrected_heading
+                    if corrected_error > 180:
+                        corrected_error -= 360
+                    elif corrected_error < -180:
+                        corrected_error += 360
+                    
+                    if abs(corrected_error) <= tolerance * 1.5:  # Slightly more lenient after recovery
+                        success = True
+                        print(f"Recovery successful: final error {corrected_error:.1f}°")
+                    else:
+                        print(f"Recovery failed: final error {corrected_error:.1f}°")
+            else:
+                print(f"Turn validation: SUCCESS (error: {angle_error:.1f}°)")
+        
+        # Adaptive settling time
+        if mode == "S-Curve":
+            await wait(75)
+        elif mode == "Precision":
+            await wait(100)
+        else:
+            await wait(50)
+        
+        if STOP_DELAY > 0:
+            tone_frequency = 1000 if success else 500  # Different tone for failed turns
+            await robot.playTone(tone_frequency, STOP_DELAY * 1000)
 
     async def straight_JTN(PORT, SPEED, DISTANCE, JUNCT_SPEED = 0, JTH = tkp.JTH, STOP_DELAY = 0.2, BRAKE_TYPE = 1):
         """
@@ -2444,7 +2730,7 @@ def run_selector(TOTAL_RUNS):
         while True:
             hub.light.on(Color.GREEN)
             if robot.getButton(1) == 1:
-                run_num = TOTAL_RUNS if run_num is 1 else run_num - 1
+                run_num = TOTAL_RUNS if run_num == 1 else run_num - 1
                 run_task(robot.waitForRelease(0))
                 run_task(robot.playTone(800, 40))
             elif robot.getButton(3) == 1:

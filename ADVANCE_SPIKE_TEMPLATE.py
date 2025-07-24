@@ -468,6 +468,44 @@ class robot:
         """Resets the robot's distance measurement."""
         drive_base.reset()
 
+    # ===== Movement Validation and Enhancement ====
+    def validateMovement(expected_distance=None, expected_angle=None, tolerance_mm=3, tolerance_deg=2):
+        """
+        Validates if the last movement was completed successfully.
+        
+        Args:
+            expected_distance: Expected distance in mm (None to skip distance check)
+            expected_angle: Expected angle change in degrees (None to skip angle check)
+            tolerance_mm: Distance tolerance in mm
+            tolerance_deg: Angle tolerance in degrees
+            
+        Returns:
+            (success, distance_error, angle_error) tuple
+        """
+        success = True
+        distance_error = 0
+        angle_error = 0
+        
+        if expected_distance is not None:
+            actual_distance = abs(drive_base.distance())
+            distance_error = abs(expected_distance) - actual_distance
+            if abs(distance_error) > tolerance_mm:
+                success = False
+                print(f"Distance validation failed: expected {expected_distance}mm, got {actual_distance:.1f}mm (error: {distance_error:.1f}mm)")
+        
+        if expected_angle is not None:
+            actual_angle = hub.imu.heading()
+            # Simple angle error calculation (could be enhanced for wraparound)
+            angle_error = expected_angle - actual_angle
+            if abs(angle_error) > tolerance_deg:
+                success = False
+                print(f"Angle validation failed: expected {expected_angle}°, got {actual_angle:.1f}° (error: {angle_error:.1f}°)")
+        
+        if success:
+            print("Movement validation: SUCCESS")
+        
+        return success, distance_error, angle_error
+
     # ===== Movements ====
     async def straight(SPEED, DISTANCE, STOP_DELAY = 0.2, BRAKE_TYPE = 1): 
         """
@@ -1787,7 +1825,7 @@ def run_selector(TOTAL_RUNS):
         while True:
             hub.light.on(Color.GREEN)
             if robot.getButton(1) == 1:
-                run_num = TOTAL_RUNS if run_num is 1 else run_num - 1
+                run_num = TOTAL_RUNS if run_num == 1 else run_num - 1
                 run_task(robot.waitForRelease(0))
                 run_task(robot.playTone(800, 40))
             elif robot.getButton(3) == 1:
