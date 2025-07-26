@@ -63,20 +63,20 @@ async def perform_new_green_white_action():
     """RDown/LUp -> Turn R -> Fwd -> Both Up -> Rev -> Turn L (return to start)"""
     print("ACTION: Performing NEW Green/White sequence.")
     await move_to_position(POSITION_LEFT_UP_RIGHT_DOWN, "R Down/L Up")
-    await robot.spotTurn(60,35)
-    await robot.straight(50, 40)
+    await robot.spotTurn(40,35)
+    await robot.straight(40, 40)
     await move_to_position(POSITION_BOTH_UP, "Both Up")
-    await robot.straight(-50, 60)
+    await robot.straight(-40, 60)
     await robot.spotTurn(-40, -2.5)
 
 async def perform_new_yellow_red_action():
     """NEW: RUp/LDown -> Turn R -> Fwd -> Both Up -> Rev -> Return (to start)"""
     print("ACTION: Performing NEW Yellow/Red sequence.")
     await move_to_position(POSITION_RIGHT_UP_LEFT_DOWN, "R Up/L Down")
-    await robot.spotTurn(-60,35)
-    await robot.straight(50, 40)
+    await robot.spotTurn(-40,35)
+    await robot.straight(40, 40)
     await move_to_position(POSITION_BOTH_UP, "Both Up")
-    await robot.straight(-50, 60)
+    await robot.straight(-40, 60)
     await robot.spotTurn(40, 2.5)
 
 async def perform_end_sequence():
@@ -111,6 +111,80 @@ async def get_color_name():
         if final_score < best_score:
             best_score, best_color_name = final_score, color["name"]
     return best_color_name
+
+# =================================================================
+# =================== ROBOT CALIBRATION ROUTINE ===================
+# =================================================================
+
+async def calibrate_robot():
+    """
+    Comprehensive calibration routine for SPIKE template robots.
+    - Calibrates wheel diameter, axle track, and gyro heading.
+    - Guides user through physical measurements and updates parameters.
+    - Prints recommended values for best accuracy.
+    """
+    print("=== ROBOT CALIBRATION ROUTINE START ===")
+    print("Step 1: Wheel Diameter Calibration")
+    print("Place the robot on a straight line. It will drive forward 300mm.")
+    await wait(2000)
+    reset()
+    await robot.straight(50, 300)
+    print("Measure the ACTUAL distance traveled (in mm) and enter below.")
+    try:
+        actual_distance = float(input("Actual distance traveled (mm): "))
+    except Exception:
+        print("Input not available. Please update wheel diameter manually.")
+        actual_distance = 300
+    expected_distance = 300
+    wheel_diameter = 62.4  # Your current value
+    new_wheel_diameter = wheel_diameter * (actual_distance / expected_distance)
+    print(f"Recommended Wheel Diameter: {new_wheel_diameter:.2f} mm")
+    print("Update your robot.Init() with this value for best straight accuracy.")
+
+    print("\nStep 2: Axle Track Calibration")
+    print("Robot will turn 360 degrees in place.")
+    await wait(2000)
+    reset()
+    await robot.spotTurn(50, 360)
+    print("Check if the robot returns to the exact starting orientation.")
+    print("If it OVER-rotates, DECREASE axle track. If it UNDER-rotates, INCREASE axle track.")
+    print("Enter the actual angle turned (use a protractor or mark the floor):")
+    try:
+        actual_angle = float(input("Actual angle turned (degrees): "))
+    except Exception:
+        print("Input not available. Please update axle track manually.")
+        actual_angle = 360
+    expected_angle = 360
+    axle_track = 95  # Your current value
+    new_axle_track = axle_track * (expected_angle / actual_angle)
+    print(f"Recommended Axle Track: {new_axle_track:.2f} mm")
+    print("Update your robot.Init() with this value for best turning accuracy.")
+
+    print("\nStep 3: Gyro Drift Calibration")
+    print("Robot will sit still for 10 seconds. Do not touch it.")
+    reset()
+    await wait(10000)
+    drift = hub.imu.heading()
+    print(f"Gyro drift after 10s: {drift:.2f} degrees")
+    if abs(drift) < 1.0:
+        print("Gyro drift is excellent.")
+    else:
+        print("If drift is high, restart the hub and recalibrate on a stable surface.")
+
+    print("\nStep 4: Speed/Accel Tuning (Optional)")
+    print("Try different values for mp.SPEED, mp.ACCEL_RATE, mp.DECEL_RATE for best results.")
+    print("Test with:")
+    print("  await robot.straight(50, 300)")
+    print("  await robot.spotTurn(50, 90)")
+    print("Adjust until you get consistent, accurate results.")
+
+    print("\n=== CALIBRATION COMPLETE ===")
+    print("Update your Init() call with the new values for best accuracy.")
+    print("Example:")
+    print(f"robot.Init({new_wheel_diameter:.2f}, {new_axle_track:.2f}, 6, 37, 6, 37)")
+
+# To run calibration, just call:
+# await calibrate_robot()
 
 # =================================================================
 # ======================= MISSION PROGRAMS ========================

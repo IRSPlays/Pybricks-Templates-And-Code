@@ -25,16 +25,8 @@ stop = {0: Stop.COAST, 1: Stop.BRAKE, 2: Stop.HOLD, 3: Stop.NONE}
 # to disable reset() if Movement use BrakeType NONE.
 none_true = False
 
-# resets both wheels
-def reset():
-    if not none_true:
-        left_wheel.reset_angle(0) # Reset Left Wheel
-        right_wheel.reset_angle(0) # Reset Right Wheel
-        drive_base.reset(0,0)
-        wait(20)
-
 # resets both wheels and yaw angle
-def full_reset():
+def reset():
     if not none_true:
         left_wheel.reset_angle(0) # Reset Left Wheel
         right_wheel.reset_angle(0) # Reset Right Wheel
